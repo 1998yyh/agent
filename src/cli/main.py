@@ -21,6 +21,9 @@ from tools.shell_tool import ShellTool
 from tools.project_tool import ProjectTool
 from utils.config import get_api_key, ModelConfig, get_model_config, get_model_from_env, get_base_url_from_env
 
+# 阶段 2 导入
+from orchestrator.workflow_engine import WorkflowEngine
+
 console = Console()
 
 
@@ -63,7 +66,68 @@ def cli():
     help="启用 Observer 实时观察",
 )
 def run(request: str, workflow_id: str, verbose: bool, model: str, base_url: str, observe: bool):
-    """运行新的工作流或恢复已有工作流"""
+    """运行新的工作流或恢复已有工作流
+
+    这是阶段 2 的多 Agent 工作流命令，会依次执行：
+    需求分析 → 技术方案 → AI 编码 → 测试生成 → 交付审查
+
+    示例:
+        dev-agent workflow "创建一个 Python 计算器项目"
+        dev-agent workflow --verbose "创建待办事项应用"
+    """
+    run_workflow(request, workflow_id, verbose, model, base_url, observe)
+
+
+@cli.command()
+@click.argument("request")
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="启用详细输出",
+)
+@click.option(
+    "--model",
+    "-m",
+    default=None,
+    help="指定模型名称",
+)
+@click.option(
+    "--base-url",
+    "-b",
+    default=None,
+    help="指定 API 基础地址",
+)
+@click.option(
+    "--observe",
+    "-o",
+    is_flag=True,
+    help="启用 Observer 实时观察",
+)
+def workflow(request: str, verbose: bool, model: str, base_url: str, observe: bool):
+    """运行多 Agent 工作流（阶段 2）
+
+    这是阶段 2 的多 Agent 工作流命令，会依次执行：
+    需求分析 → 技术方案 → AI 编码 → 测试生成 → 交付审查
+
+    示例:
+        dev-agent workflow "创建一个 Python 计算器项目"
+        dev-agent workflow --verbose "创建待办事项应用"
+    """
+    run_workflow(request, None, verbose, model, base_url, observe)
+
+
+def run_workflow(request: str, workflow_id: str | None, verbose: bool, model: str, base_url: str, observe: bool):
+    """执行工作流的通用函数
+
+    Args:
+        request: 用户需求
+        workflow_id: 可选的工作流 ID（用于恢复）
+        verbose: 是否详细输出
+        model: 模型名称
+        base_url: API 基础地址
+        observe: 是否启用 Observer
+    """
     try:
         api_key = get_api_key()
         os.environ["ANTHROPIC_API_KEY"] = api_key
@@ -80,61 +144,7 @@ def run(request: str, workflow_id: str, verbose: bool, model: str, base_url: str
         base_url=base_url if base_url else get_base_url_from_env(),
     ) if (model or base_url) else get_model_config()
 
-    # 创建 ObserverHook (如果启用观察)
-    observer_hook = None
-    if observe:
-        from observers.hook import ObserverHook
-        from observers.logger import JSONLogger
-        from observers.server_client import WebSocketClient
-
-        session_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-        logger = JSONLogger()
-        logger.start_session(session_id)
-        client = WebSocketClient()
-        observer_hook = ObserverHook(session_id=session_id, logger=logger, server_client=client)
-
-        # 预连接 WebSocket 客户端 (使用持久事件循环)
-        async def connect_observer():
-            try:
-                await client.connect()
-                console.print(f"[green]Observer 已启动，会话 ID: {session_id}[/green]")
-                console.print(f"[dim]已连接到 Observer 服务器：ws://127.0.0.1:8765[/dim]")
-                console.print(f"[dim]请确保已运行 dev-agent watch 启动 Observer 服务器[/dim]")
-            except Exception as e:
-                console.print(f"[yellow]Observer 警告：无法连接到服务器：{e}[/yellow]")
-                console.print(f"[dim]本地日志仍会保存到 storage/logs/{session_id}.json[/dim]")
-                console.print(f"[dim]提示：请确保已运行 dev-agent watch 或 dev-agent observer-server[/dim]")
-
-        # 在持久事件循环中连接
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(connect_observer())
-
-    agent = Agent(
-        name="DevAgent",
-        system="""你是一个专业的软件开发助手。你可以帮助用户:
-
-1. 创建项目结构和初始化代码
-2. 编写和修改代码文件
-3. 执行 Git 版本控制操作
-4. 运行开发命令和测试
-
-请逐步思考每个任务，使用可用的工具来完成工作。
-如果不确定，请先使用 think 工具进行推理。""",
-        tools=[
-            ThinkTool(),
-            FileReadTool(),
-            FileWriteTool(),
-            GitTool(),
-            ShellTool(),
-            ProjectTool(),
-        ],
-        config=config,
-        verbose=verbose,
-        observer_hook=observer_hook,
-    )
-
-    console.print(Panel(f"用户需求：{request}", title="New Workflow"))
+    console.print(Panel(f"用户需求：{request}", title="多 Agent 工作流"))
 
     # 创建持久事件循环
     loop = asyncio.new_event_loop()
@@ -142,16 +152,25 @@ def run(request: str, workflow_id: str, verbose: bool, model: str, base_url: str
 
     try:
         async def execute():
-            response = await agent.run_async(request)
+            engine = WorkflowEngine()
 
-            # 关闭 observer hook
-            if observer_hook:
-                await observer_hook.close()
+            if workflow_id:
+                # 恢复已有工作流
+                console.print(f"[yellow]恢复工作流：{workflow_id}[/yellow]")
+                result = await engine.resume_from_checkpoint(workflow_id)
+            else:
+                # 执行新工作流
+                result = await engine.execute(request)
 
             # 显示结果
-            for block in response.content:
-                if block.type == "text":
-                    console.print(f"\n{block.text}")
+            console.print("\n[bold]工作流结果:[/bold]")
+            console.print(f"  状态：{result.get('status')}")
+            console.print(f"  完成的阶段：{result.get('stages_completed')}")
+
+            if result.get('errors'):
+                console.print(f"\n[red]错误:[/red]")
+                for err in result['errors']:
+                    console.print(f"  - {err}")
 
         loop.run_until_complete(execute())
     finally:
@@ -167,14 +186,47 @@ def run(request: str, workflow_id: str, verbose: bool, model: str, base_url: str
 )
 def list_workflows(limit: int):
     """列出最近的工作流"""
-    console.print("[yellow]工作流列表功能将在阶段 2 实现[/yellow]")
+    try:
+        engine = WorkflowEngine()
+        workflows = engine.list_workflows()
+
+        if not workflows:
+            console.print("[yellow]没有找到工作流[/yellow]")
+            return
+
+        console.print("\n[bold]工作流列表:[/bold]\n")
+        for wf in workflows[:limit]:
+            status = "完成" if len(wf["stages_completed"]) == 5 else "进行中"
+            console.print(f"  {wf['workflow_id']} | {status} | {len(wf['stages_completed'])}/5 阶段 | {wf['user_request'][:50]}...")
+    except Exception as e:
+        console.print(f"[red]错误：{e}[/red]")
 
 
 @cli.command()
 @click.argument("workflow_id")
 def status(workflow_id: str):
     """显示工作流状态"""
-    console.print("[yellow]工作流状态功能将在阶段 2 实现[/yellow]")
+    try:
+        engine = WorkflowEngine()
+        wf = engine.get_workflow(workflow_id)
+
+        if not wf:
+            console.print(f"[red]未找到工作流：{workflow_id}[/red]")
+            return
+
+        console.print(f"\n[bold]工作流详情:[/bold] {workflow_id}")
+        console.print(f"  状态：{'完成' if len(wf['stages_completed']) == 5 else '进行中'}")
+        console.print(f"  需求：{wf['user_request']}")
+        console.print(f"  已完成阶段：{wf['stages_completed']}")
+        console.print(f"  创建时间：{wf['created_at']}")
+        console.print(f"  更新时间：{wf['updated_at']}")
+
+        if wf['errors']:
+            console.print(f"\n[red]错误:[/red]")
+            for err in wf['errors']:
+                console.print(f"  - {err}")
+    except Exception as e:
+        console.print(f"[red]错误：{e}[/red]")
 
 
 @cli.command()
@@ -321,6 +373,76 @@ def print_help():
   dev-agent replay         - 回放历史会话
   dev-agent --help         - 显示帮助
 """)
+
+
+@cli.command()
+@click.argument("workflow_id")
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="启用详细输出",
+)
+@click.option(
+    "--model",
+    "-m",
+    default=None,
+    help="指定模型名称",
+)
+@click.option(
+    "--base-url",
+    "-b",
+    default=None,
+    help="指定 API 基础地址",
+)
+def resume(workflow_id: str, verbose: bool, model: str, base_url: str):
+    """从检查点恢复工作流
+
+    从上一个检查点继续执行未完成的工作流。
+
+    示例:
+        dev-agent resume wf_abc12345
+    """
+    try:
+        api_key = get_api_key()
+        os.environ["ANTHROPIC_API_KEY"] = api_key
+    except ValueError as e:
+        console.print(f"[red]错误：{e}[/red]")
+        return
+
+    # 创建模型配置
+    config = ModelConfig(
+        model=model if model else get_model_from_env(),
+        base_url=base_url if base_url else get_base_url_from_env(),
+    ) if (model or base_url) else get_model_config()
+
+    console.print(Panel(f"恢复工作流：{workflow_id}", title="Resume Workflow"))
+
+    # 创建持久事件循环
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        async def execute():
+            engine = WorkflowEngine()
+            result = await engine.resume_from_checkpoint(workflow_id)
+
+            # 显示结果
+            console.print("\n[bold]恢复结果:[/bold]")
+            console.print(f"  状态：{result.get('status')}")
+            console.print(f"  完成的阶段：{result.get('stages_completed')}")
+
+            if result.get('errors'):
+                console.print(f"\n[red]错误:[/red]")
+                for err in result['errors']:
+                    console.print(f"  - {err}")
+
+            if "error" in result:
+                console.print(f"\n[yellow]{result['error']}[/yellow]")
+
+        loop.run_until_complete(execute())
+    finally:
+        loop.close()
 
 
 @cli.command()
