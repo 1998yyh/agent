@@ -272,11 +272,82 @@ def print_help():
 
 可用命令:
   dev-agent run <需求>     - 运行工作流
-  dev-agent list           - 列出工作流
-  dev-agent status <ID>    - 显示状态
   dev-agent interactive    - 交互模式
+  dev-agent observer       - 启动 Observer 客户端
+  dev-agent observer-server - 启动 Observer 服务器
+  dev-agent replay         - 回放历史会话
   dev-agent --help         - 显示帮助
 """)
+
+
+@cli.command()
+@click.option("--server", "-s", default="ws://127.0.0.1:8765", help="Observer 服务器地址")
+def observer(server: str):
+    """启动 Observer 客户端 - 实时查看 Agent 交互过程"""
+    from observers.client import ObserverClient
+
+    console.print(Panel("DevAgent Observer", title="Starting"))
+    console.print(f"连接到服务器：{server}")
+
+    client = ObserverClient(server_url=server)
+
+    try:
+        asyncio.run(client.connect_and_listen())
+    except KeyboardInterrupt:
+        console.print("\n[blue]Observer 已断开连接[/blue]")
+
+
+@cli.command()
+@click.option("--port", "-p", default=8765, help="服务器端口")
+@click.option("--host", "-h", default="127.0.0.1", help="监听地址")
+def observer_server(port: int, host: str):
+    """启动 Observer 服务器"""
+    from observers.server import ObserverServer
+
+    server = ObserverServer(host=host, port=port)
+    console.print(f"[green]启动 Observer 服务器于 {host}:{port}[/green]")
+    console.print("[yellow]按 Ctrl+C 停止[/yellow]")
+
+    try:
+        asyncio.run(server.start())
+    except KeyboardInterrupt:
+        console.print("\n[blue]Observer 服务器已停止[/blue]")
+
+
+@cli.command()
+@click.argument("session_id", required=False)
+def replay(session_id: str | None):
+    """回放历史会话"""
+    from observers.logger import JSONLogger
+
+    logger = JSONLogger()
+
+    if not session_id:
+        # 列出所有会话
+        sessions = logger.list_sessions()
+        if not sessions:
+            console.print("[yellow]没有找到历史会话[/yellow]")
+            return
+
+        console.print("\n[bold]历史会话列表:[/bold]\n")
+        for s in sessions[:10]:  # 显示最近 10 个
+            start_time = s.get("start_time", "N/A")
+            if start_time and start_time != "None":
+                start_time = start_time[:19]  # 截取 ISO 格式
+            console.print(f"  {s['session_id']} | {start_time} | {s['event_count']} 个事件")
+        console.print("\n使用 [bold]dev-agent replay <session_id>[/bold] 回放指定会话")
+    else:
+        # 回放指定会话
+        session = logger.load_session(session_id)
+        if not session:
+            console.print(f"[red]未找到会话：{session_id}[/red]")
+            return
+
+        console.print(Panel(f"回放会话：{session_id}", title="Replay"))
+        for event in session.events:
+            timestamp = event.timestamp.strftime("%H:%M:%S") if event.timestamp else "??:??:??"
+            console.print(f"\n[{event.event_type.value}] {timestamp}")
+            console.print(f"  {event.data}")
 
 
 if __name__ == "__main__":
