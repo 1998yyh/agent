@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.venv/
+.env
+.env.local
+*.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 项目输出
+demo_project/
+
+# 日志
+*.log
+logs/
+
+# 存储
+storage/workflows/*
+storage/checkpoints/*
+storage/logs/*
+!storage/.gitkeep
+
+# 测试
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+
+# 分发
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Python 工具
+.pyre/
+.mypy_cache/
+.pytype/
+
+# 其他
+*.orig
+Thumbs.db
+nul
+=12.0

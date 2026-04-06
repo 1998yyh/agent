@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sys; print\\(f''Python: {sys.version}''\\)\")"
+    ]
+  },
+  "enableAllProjectMcpServers": false,
+  "disabledMcpjsonServers": ["ide"]
+}

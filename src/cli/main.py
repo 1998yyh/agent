@@ -92,7 +92,23 @@ def run(request: str, workflow_id: str, verbose: bool, model: str, base_url: str
         logger.start_session(session_id)
         client = WebSocketClient()
         observer_hook = ObserverHook(session_id=session_id, logger=logger, server_client=client)
-        console.print(f"[green]Observer 已启动，会话 ID: {session_id}[/green]")
+
+        # 预连接 WebSocket 客户端 (使用持久事件循环)
+        async def connect_observer():
+            try:
+                await client.connect()
+                console.print(f"[green]Observer 已启动，会话 ID: {session_id}[/green]")
+                console.print(f"[dim]已连接到 Observer 服务器：ws://127.0.0.1:8765[/dim]")
+                console.print(f"[dim]请确保已运行 dev-agent watch 启动 Observer 服务器[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]Observer 警告：无法连接到服务器：{e}[/yellow]")
+                console.print(f"[dim]本地日志仍会保存到 storage/logs/{session_id}.json[/dim]")
+                console.print(f"[dim]提示：请确保已运行 dev-agent watch 或 dev-agent observer-server[/dim]")
+
+        # 在持久事件循环中连接
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(connect_observer())
 
     agent = Agent(
         name="DevAgent",
@@ -120,19 +136,26 @@ def run(request: str, workflow_id: str, verbose: bool, model: str, base_url: str
 
     console.print(Panel(f"用户需求：{request}", title="New Workflow"))
 
-    async def execute():
-        response = await agent.run_async(request)
+    # 创建持久事件循环
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
-        # 关闭 observer hook
-        if observer_hook:
-            await observer_hook.close()
+    try:
+        async def execute():
+            response = await agent.run_async(request)
 
-        # 显示结果
-        for block in response.content:
-            if block.type == "text":
-                console.print(f"\n{block.text}")
+            # 关闭 observer hook
+            if observer_hook:
+                await observer_hook.close()
 
-    asyncio.run(execute())
+            # 显示结果
+            for block in response.content:
+                if block.type == "text":
+                    console.print(f"\n{block.text}")
+
+        loop.run_until_complete(execute())
+    finally:
+        loop.close()
 
 
 @cli.command()
@@ -191,6 +214,10 @@ def interactive(model: str, base_url: str, observe: bool):
         base_url=base_url if base_url else get_base_url_from_env(),
     ) if (model or base_url) else get_model_config()
 
+    # 创建持久事件循环
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     # 创建 ObserverHook (如果启用观察)
     observer_hook = None
     if observe:
@@ -203,7 +230,19 @@ def interactive(model: str, base_url: str, observe: bool):
         logger.start_session(session_id)
         client = WebSocketClient()
         observer_hook = ObserverHook(session_id=session_id, logger=logger, server_client=client)
-        console.print(f"[green]Observer 已启动，会话 ID: {session_id}[/green]")
+
+        # 预连接 WebSocket 客户端
+        async def connect_observer_interactive():
+            try:
+                await client.connect()
+                console.print(f"[green]Observer 已启动，会话 ID: {session_id}[/green]")
+                console.print(f"[dim]已连接到 Observer 服务器：ws://127.0.0.1:8765[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]Observer 警告：无法连接到服务器：{e}[/yellow]")
+                console.print(f"[dim]本地日志仍会保存到 storage/logs/{session_id}.json[/dim]")
+                console.print(f"[dim]提示：运行 dev-agent observer-server 启动服务器[/dim]")
+
+        loop.run_until_complete(connect_observer_interactive())
 
     agent = Agent(
         name="DevAgent",
@@ -236,7 +275,7 @@ def interactive(model: str, base_url: str, observe: bool):
             if request.lower() in ["quit", "exit", "q"]:
                 # 关闭 observer hook
                 if observer_hook:
-                    asyncio.run(observer_hook.close())
+                    loop.run_until_complete(observer_hook.close())
                 console.print("再见！")
                 break
 
@@ -244,22 +283,23 @@ def interactive(model: str, base_url: str, observe: bool):
                 print_help()
                 continue
 
-            # 执行工作流
+            # 执行工作流 (使用持久事件循环)
             async def execute():
                 response = await agent.run_async(request)
-                # 每次执行后关闭 hook
-                if observer_hook:
-                    await observer_hook.close()
+                # 注意：不在这里关闭 hook，以便继续使用同一个会话
                 for block in response.content:
                     if block.type == "text":
                         console.print(f"\n{block.text}")
 
-            asyncio.run(execute())
+            loop.run_until_complete(execute())
 
         except KeyboardInterrupt:
             console.print("\n中断，继续输入以继续使用。")
         except Exception as e:
             console.print(f"\n发生错误：{str(e)}")
+
+    # 清理事件循环
+    loop.close()
 
 
 def print_help():
@@ -271,10 +311,13 @@ def print_help():
   - 输入 'quit' 退出
 
 可用命令:
-  dev-agent run <需求>     - 运行工作流
+  dev-agent watch          - 一键启动 Observer（推荐）
   dev-agent interactive    - 交互模式
-  dev-agent observer       - 启动 Observer 客户端
-  dev-agent observer-server - 启动 Observer 服务器
+  dev-agent interactive --observe  - 带 Observer 的交互模式
+  dev-agent run <需求>     - 运行工作流
+  dev-agent run --observe <需求>   - 带 Observer 的工作流
+  dev-agent observer       - 仅启动 Observer 客户端
+  dev-agent observer-server - 仅启动 Observer 服务器
   dev-agent replay         - 回放历史会话
   dev-agent --help         - 显示帮助
 """)
@@ -348,6 +391,60 @@ def replay(session_id: str | None):
             timestamp = event.timestamp.strftime("%H:%M:%S") if event.timestamp else "??:??:??"
             console.print(f"\n[{event.event_type.value}] {timestamp}")
             console.print(f"  {event.data}")
+
+
+@cli.command()
+@click.option("--port", "-p", default=8765, help="服务器端口")
+def watch(port: int):
+    """一键启动 Observer - 自动启动服务器和客户端
+
+    这是最简单的 Observer 启动方式，无需手动启动服务器。
+    会在后台启动 WebSocket 服务器，然后打开客户端界面。
+
+    使用方法:
+    1. 运行此命令启动 Observer
+    2. 在另一个终端运行: dev-agent interactive --observe
+    3. 或在另一个终端运行: dev-agent run --observe "你的需求"
+    """
+    import subprocess
+    import sys
+    import time
+
+    console.print(Panel("一键启动 Observer", title="Starting"))
+    console.print("\n[yellow]使用说明:[/yellow]")
+    console.print("  1. 本终端已启动 Observer 服务器和客户端")
+    console.print("  2. 请打开另一个终端，运行以下命令开始会话:")
+    console.print("     [bold]dev-agent interactive --observe[/bold]")
+    console.print("     或 [bold]dev-agent run --observe \"你的需求\"[/bold]")
+    console.print()
+
+    # 启动后台服务器
+    console.print("[dim]正在启动 Observer 服务器...[/dim]")
+
+    # 使用 subprocess 启动后台进程
+    server_process = subprocess.Popen(
+        [sys.executable, "-m", "src.cli.main", "observer-server", "--port", str(port)],
+        creationflags=subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0,
+    )
+
+    # 等待服务器启动
+    time.sleep(2)  # 增加等待时间
+
+    console.print(f"[green]服务器已启动于 127.0.0.1:{port}[/green]")
+    console.print("[green]请在另一个终端运行：dev-agent interactive --observe[/green]")
+    console.print("[dim]按 Ctrl+C 停止观察[/dim]\n")
+
+    # 启动客户端
+    from observers.client import ObserverClient
+
+    client = ObserverClient(server_url=f"ws://127.0.0.1:{port}")
+
+    try:
+        asyncio.run(client.connect_and_listen())
+    except KeyboardInterrupt:
+        console.print("\n[blue]Observer 已断开连接[/blue]")
+    finally:
+        server_process.terminate()
 
 
 if __name__ == "__main__":

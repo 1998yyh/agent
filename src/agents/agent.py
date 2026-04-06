@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -65,6 +66,20 @@ class Agent:
         if self.verbose:
             print(f"\n[{self.name}] Agent initialized")
 
+    def _extract_usage(self, response) -> dict:
+        """从响应中提取 usage 信息"""
+        if hasattr(response, "usage"):
+            return dict(response.usage) if hasattr(response.usage, "to_dict") else dict(response.usage)
+        return {}
+
+    def _extract_text_content(self, response) -> str:
+        """从响应中提取文本内容"""
+        text_parts = []
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+        return "".join(text_parts)
+
     def _prepare_message_params(self) -> dict[str, Any]:
         """准备 client.messages.create() 调用所需的参数
 
@@ -122,7 +137,7 @@ class Agent:
             # 发送 API 响应事件
             if self.observer_hook:
                 await self.observer_hook.on_api_response(
-                    dict(response.usage) if hasattr(response, "usage") else {},
+                    self._extract_usage(response),
                     [block.to_dict() if hasattr(block, "to_dict") else block for block in response.content]
                 )
 
@@ -183,22 +198,23 @@ class Agent:
             else:
                 # 发送 AI 响应事件
                 if self.observer_hook:
-                    text_content = ""
+                    text_content = self._extract_text_content(response)
+
+                    # 提取思考内容
                     for block in response.content:
-                        if block.type == "text":
-                            text_content += block.text
-                        elif hasattr(block, "text") and block.type == "thinking":
-                            # 发送思考事件
+                        if hasattr(block, "text") and block.type == "thinking":
                             await self.observer_hook.on_ai_thinking(block.text)
 
                     await self.observer_hook.on_ai_response(
                         text_content,
-                        dict(response.usage) if hasattr(response, "usage") else {}
+                        self._extract_usage(response)
                     )
                 return response  # 没有工具调用，返回最终响应
 
     async def run_async(self, user_input: str) -> list[dict[str, Any]]:
         """异步运行 Agent，支持 MCP 工具"""
+        start_time = time.time()  # 记录开始时间
+
         async with AsyncExitStack() as stack:
             original_tools = list(self.tools)
 
@@ -208,9 +224,27 @@ class Agent:
                     self.mcp_servers, stack
                 )
                 self.tools.extend(mcp_tools)  # 添加 MCP 工具到工具列表
+
+                # 发送会话开始事件
+                if self.observer_hook:
+                    await self.observer_hook.on_session_start(
+                        self.config.model,
+                        [tool.name for tool in self.tools]
+                    )
+
                 return await self._agent_loop(user_input)
             finally:
                 self.tools = original_tools  # 恢复原始工具列表
+
+                # 发送会话结束事件
+                if self.observer_hook:
+                    duration = time.time() - start_time
+                    # 从历史中获取总 token 数
+                    total_tokens = getattr(self.history, 'total_tokens', 0)
+                    await self.observer_hook.on_session_end(
+                        total_tokens=total_tokens,
+                        duration=duration
+                    )
 
     def run(self, user_input: str) -> list[dict[str, Any]]:
         """同步运行 Agent"""

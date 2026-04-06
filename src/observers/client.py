@@ -57,7 +57,7 @@ class ObserverClient:
         )
 
         layout["footer"].update(
-            Panel("按 Ctrl+C 断开连接", style="dim", justify="center")
+            Panel("按 Ctrl+C 断开连接", style="dim")
         )
 
         return layout
@@ -128,13 +128,20 @@ class ObserverClient:
         try:
             async with websockets.connect(self.server_url) as websocket:
                 self.console.print("[green]已连接到 Observer 服务器[/green]")
+                print(f"[Observer Client] 已连接到 {self.server_url}")  # 调试输出到 stdout
                 self.layout = self.create_layout()
                 self.console.print(self.layout)
 
                 async for message in websocket:
                     event = json.loads(message)
+                    event_type = event.get("type", "unknown")
+                    # 调试输出：在 TUI 外也输出事件
+                    print(f"\n[Observer Client] >>> 收到事件：{event_type}")
                     self.handle_event(event)
+                    # 清除屏幕并重新绘制布局
+                    self.console.clear()
                     self.console.print(self.layout)
+                    self.console.file.flush()
 
         except ConnectionRefusedError:
             self.console.print("[red]无法连接到 Observer 服务器，请确保服务器已启动[/red]")
@@ -158,7 +165,8 @@ class ObserverClient:
             self.session_id = event.get("session_id", "")
             self.update_header()
             model = data.get("model", "N/A")
-            self.console.print(Panel(f"会话开始 | 模型：{model}", title="Session"))
+            # 在事件日志中显示会话开始
+            self.add_event_to_log(f"SESSION_START (模型：{model})", timestamp)
 
         elif event_type == "user_message":
             self.update_user_panel(data.get("content", ""))
@@ -186,11 +194,7 @@ class ObserverClient:
         elif event_type == "session_end":
             duration = data.get("duration", 0)
             tokens = data.get("total_tokens", 0)
-            self.console.print(Panel(
-                f"会话结束 | 时长：{duration:.1f}s | Tokens: {tokens}",
-                title="Session"
-            ))
-            self.add_event_to_log("SESSION_END", timestamp)
+            self.add_event_to_log(f"SESSION_END (时长:{duration:.1f}s, Tokens:{tokens})", timestamp)
 
         # 更新头部显示会话 ID
         if self.session_id:

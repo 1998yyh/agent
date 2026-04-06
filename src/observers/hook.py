@@ -1,11 +1,14 @@
 """ObserverHook - 注入到 Agent 中捕获事件"""
 
 import asyncio
+import logging
 from typing import Any
 
 from .events import Event, EventType
 from .logger import JSONLogger
 from .server_client import WebSocketClient
+
+logger = logging.getLogger(__name__)
 
 
 class ObserverHook:
@@ -44,11 +47,17 @@ class ObserverHook:
     async def _ensure_client_connected(self):
         """确保 WebSocket 客户端已连接"""
         if self.server_client and not self.server_client.is_connected:
+            print(f"[ObserverHook] 尝试连接 WebSocket 服务器：{self.server_client.server_url}")
             try:
                 await self.server_client.connect()
-            except Exception:
-                # 连接失败时静默处理，仅使用本地日志
-                pass
+                print(f"[ObserverHook] WebSocket 连接成功")
+            except Exception as e:
+                # 连接失败时记录警告，但不影响本地日志
+                logger.warning(f"无法连接到 WebSocket 服务器：{e}")
+                print(f"[Observer 警告] 无法连接到 WebSocket 服务器：{e}")
+                print(f"[Observer 提示] 请确保已运行：dev-agent observer-server 或 dev-agent watch")
+        elif self.server_client and self.server_client.is_connected:
+            print(f"[ObserverHook] WebSocket 已连接，无需重新连接")
 
     async def _emit(self, event: Event):
         """发送事件到 Logger 和 Server
@@ -65,9 +74,14 @@ class ObserverHook:
                 await self._ensure_client_connected()
                 if self.server_client.is_connected:
                     await self.server_client.send(event.to_dict())
-            except Exception:
-                # 发送失败时静默处理
-                pass
+                    # 调试输出：确认事件已发送
+                    print(f"[ObserverHook] 事件已发送：{event.event_type.value}")
+                else:
+                    print(f"[ObserverHook] 警告：WebSocket 未连接，事件未发送：{event.event_type.value}")
+            except Exception as e:
+                # 发送失败时记录警告
+                logger.warning(f"发送事件失败：{e}")
+                print(f"[ObserverHook] 错误：发送事件失败：{e}")
 
     async def on_session_start(self, model: str, tools: list[str]):
         """会话开始事件

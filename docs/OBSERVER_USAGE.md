@@ -29,35 +29,40 @@ Observer 工具允许用户实时查看 Agent 的完整交互过程，包括：
 pip install -r requirements.txt
 ```
 
-### 2.2 启动 Observer 服务器
+### 2.2 一键启动（推荐）
+
+最简单的方式，自动启动服务器和客户端：
 
 ```bash
-# 后台启动服务器
-dev-agent observer-server &
-
-# 或在前台启动
-dev-agent observer-server
+dev-agent watch
 ```
 
-### 2.3 启动 Observer 客户端
+然后在另一个终端窗口运行：
 
 ```bash
-# 连接到本地服务器
-dev-agent observer
-
-# 连接到远程服务器
-dev-agent observer --server ws://192.168.1.100:8765
-```
-
-### 2.4 运行带观察的 Agent
-
-```bash
-# 交互模式
 dev-agent interactive --observe
-
-# 单次运行
+# 或
 dev-agent run --observe "创建一个 Python 项目"
 ```
+
+### 2.3 分步启动（高级）
+
+如果需要更多控制权，可以分别启动服务器和客户端：
+
+```bash
+# 终端 1：启动服务器
+dev-agent observer-server
+
+# 终端 2：启动客户端
+dev-agent observer
+
+# 终端 3：运行带观察的 Agent
+dev-agent interactive --observe
+```
+
+### 2.4 停止观察
+
+按 `Ctrl+C` 断开 Observer 客户端连接。
 
 ---
 
